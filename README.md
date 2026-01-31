@@ -77,7 +77,7 @@ luna-eye/
 Run the tool **as Administrator** to access protected memory regions:
 
 ```bash
-luajit main.lua
+.\run.ps1
 ```
 
 #### 🐧 Linux
