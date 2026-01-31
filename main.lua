@@ -4,7 +4,7 @@ package.path = package.path .. ";./?.lua;./pie/?.lua"
 
 local backend
 if os_type == "Windows" then
-	backend = require("windows") -- سيبحث في مجلد pie تلقائياً بفضل التعديل أعلاه
+	backend = require("windows") 
 else
 	backend = require("linux")
 end
@@ -23,7 +23,7 @@ print([[
  |______|\____/|_| \_/_/    \_\______| \_/ \___|
 ======================================================
  [>] ENGINE   : LUNA-EYE v1.0 (Stable)
- [>] OPERATOR : Iaz
+ [>] OPERATOR : DASKR
  [>] PLATFORM : ]] .. os_type .. [[
 ======================================================
 ]])
