@@ -1,92 +1,124 @@
 local ffi = require("ffi")
+local os_type = ffi.os
+package.path = package.path .. ";./?.lua;./pie/?.lua"
 
--- [1] Backend Definitions (Updated to include pwrite)
-ffi.cdef[[
-    typedef struct FILE FILE;
-    FILE *fopen(const char *filename, const char *mode);
-    int fclose(FILE *stream);
-    char *fgets(char *s, int n, FILE *stream);
-    int open(const char *pathname, int flags);
-    int close(int fd);
-    long pread(int fd, void *buf, size_t count, long offset);
-    long pwrite(int fd, const void *buf, size_t count, long offset);
-    int getpid();
-]]
-
--- [2] PIE Engine Class
-local PIE = {}
-PIE.__index = PIE
-
-function PIE.new(pid)
-    local self = setmetatable({}, PIE)
-    self.pid = pid or ffi.C.getpid()
-    return self
+local backend
+if os_type == "Windows" then
+	backend = require("windows") -- سيبحث في مجلد pie تلقائياً بفضل التعديل أعلاه
+else
+	backend = require("linux")
+end
+local function clear()
+	os.execute(os_type == "Windows" and "cls" or "clear")
 end
 
--- (الوظائف السابقة مدمجة هنا للسرعة)
-function PIE:get_info()
-    local f = ffi.C.fopen(string.format("/proc/%d/status", self.pid), "r")
-    if not f then return nil end
-    local info, buffer = {}, ffi.new("char[256]")
-    for i = 1, 5 do if ffi.C.fgets(buffer, 256, f) ~= nil then info[#info+1] = ffi.string(buffer):gsub("\n", "") end end
-    ffi.C.fclose(f); return info
+clear()
+print([[
+======================================================
+  _      _    _ _   _          ______                      
+ | |    | |  | | \ | |   /\   |  ____|                     
+ | |    | |  | |  \| |  /  \  | |__  __   _____            
+ | |    | |  | | . ` | / /\ \ |  __| \ \ / / _ \           
+ | |____| |__| | |\  |/ ____ \| |____ \ V /  __/           
+ |______|\____/|_| \_/_/    \_\______| \_/ \___|
+======================================================
+ [>] ENGINE   : LUNA-EYE v1.0 (Stable)
+ [>] OPERATOR : Iaz
+ [>] PLATFORM : ]] .. os_type .. [[
+======================================================
+]])
+
+local LUNA = {}
+LUNA.__index = LUNA
+function LUNA.new(pid)
+	local self = setmetatable({}, LUNA)
+	self.pid = pid
+	if os_type == "Windows" then
+		self.handle = ffi.C.OpenProcess(0x1F0FFF, 0, pid)
+	end
+	return self
+end
+function LUNA:target()
+	return os_type == "Windows" and self.handle or self.pid
+end
+function LUNA:find(pattern)
+	local p = pattern:gsub(" ", ""):gsub("%?%?", "."):gsub("(%x%x)", function(h)
+		return string.char(tonumber(h, 16))
+	end)
+	local mods = backend.list_modules(self:target())
+	if not mods then
+		return nil
+	end
+	local CHUNK = 1024 * 1024
+	for _, m in ipairs(mods) do
+		local size = tonumber(m.stop - m.start)
+		for offset = 0, size - 1, CHUNK do
+			local r_len = math.min(CHUNK, size - offset)
+			local data = backend.read_memory(self:target(), m.start + offset, r_len + #p)
+			if data then
+				local pos = data:find(p, 1, false)
+				if pos then
+					return m.start + offset + pos - 1, m.name
+				end
+			end
+			data = nil
+		end
+		collectgarbage("step")
+	end
 end
 
-function PIE:list_modules()
-    local f = ffi.C.fopen(string.format("/proc/%d/maps", self.pid), "r")
-    if not f then return nil end
-    local modules, buffer = {}, ffi.new("char[512]")
-    while ffi.C.fgets(buffer, 512, f) ~= nil do
-        local line = ffi.string(buffer)
-        local s, e = line:match("(%x+)%-(%x+)")
-        local path = line:match("/.+") or "[Anonymous]"
-        modules[#modules+1] = {name=path:match("([^/]+)$") or path, start=tonumber(s, 16), stop=tonumber(e, 16)}
-    end
-    ffi.C.fclose(f); return modules
+local function select_proc()
+	io.write("[?] SEARCH PROCESS : ")
+	local query = io.read():lower()
+	local all = backend.list_processes()
+	local res = {}
+	for _, p in ipairs(all) do
+		if p.name:lower():find(query) then
+			table.insert(res, p)
+		end
+	end
+	if #res == 0 then
+		return nil
+	end
+	print("\n[#] ID    | PID    | PROCESS NAME")
+	print("----|--------|----------------------")
+	for i, p in ipairs(res) do
+		print(string.format("[%02d] | %-6d | %s", i, p.pid, p.name))
+	end
+	io.write("\n[>] SELECT TARGET ID: ")
+	local c = tonumber(io.read())
+	return res[c] and res[c].pid or nil, res[c] and res[c].name or nil
 end
 
-function PIE:read(addr, size)
-    local fd = ffi.C.open(string.format("/proc/%d/mem", self.pid), 0)
-    if fd < 0 then return nil end
-    local buf = ffi.new("char[?]", size)
-    local n = ffi.C.pread(fd, buf, size, ffi.cast("long", addr))
-    ffi.C.close(fd); return n > 0 and ffi.string(buf, n) or nil
+local pid, name = select_proc()
+if not pid then
+	return
+end
+local eye = LUNA.new(pid)
+if os_type == "Windows" and eye.handle == ffi.NULL then
+	print("\n[!] Access Denied")
+	return
 end
 
--- الميزة الجديدة: الكتابة في الذاكرة
-function PIE:write(addr, data)
-    -- O_RDWR في لينكس قيمتها عادة 2
-    local fd = ffi.C.open(string.format("/proc/%d/mem", self.pid), 2)
-    if fd < 0 then return false, "فشل فتح الذاكرة للكتابة (تحتاج صلاحيات أعلى)" end
-    local n = ffi.C.pwrite(fd, data, #data, ffi.cast("long", addr))
-    ffi.C.close(fd)
-    return n > 0
-end
-
-function PIE:find_string(str)
-    local mods = self:list_modules()
-    for _, m in ipairs(mods) do
-        local size = m.stop - m.start
-        if size > 0 and size < 5000000 then -- 5MB limit
-            local data = self:read(m.start, size)
-            if data then
-                local pos = data:find(str, 1, true)
-                if pos then return m.start + pos - 1 end
-            end
-        end
-    end
-    return nil
-end
-
--- [3] Test execution
-local engine = PIE.new()
-print("--- PIE Final Stress Test ---")
-local addr = engine:find_string("luajit")
+print("\n[*] ATTACHED TO : " .. name)
+io.write("[?] ENTER HEX PATTERN : ")
+local pat = io.read()
+local addr, mod = eye:find(pat)
 
 if addr then
-    print(string.format("[+] Found 'luajit' at: 0x%X", addr))
-    -- تجربة تعديل الذاكرة (تنبيه: هذا قد يجعل البرنامج ينهار إذا عدلت شيئاً حساساً)
-    -- سنقوم بكتابة "PIE-JIT" بدلاً من "luajit" في الذاكرة
-    local success = engine:write(addr, "PIE-JIT")
-    if success then print("[!] Memory overwritten successfully!") end
+	print("\n[+] MATCH FOUND: 0x" .. string.format("%X", tonumber(addr)) .. " [" .. mod .. "]")
+	io.write("[?] INJECT NEW DATA? (y/n): ")
+	if io.read():lower() == "y" then
+		io.write("[>] NEW HEX DATA : ")
+		local hex = io.read():gsub(" ", ""):gsub("(%x%x)", function(h)
+			return string.char(tonumber(h, 16))
+		end)
+		if backend.write_memory(eye:target(), addr, hex) then
+			print("[+] SUCCESS")
+		else
+			print("[!] FAILED")
+		end
+	end
+else
+	print("[-] NOT FOUND")
 end
