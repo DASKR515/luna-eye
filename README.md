@@ -82,6 +82,9 @@ Run the tool **as Administrator** to access protected memory regions:
 
 #### 🐧 Linux
 
+```bash
+sudo XXX install luajit <all distro Linux> 
+```
 Run with **sudo** to allow access to process memory:
 
 ```bash
