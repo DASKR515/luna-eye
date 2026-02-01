@@ -1,6 +1,5 @@
 local ffi = require("ffi")
 
--- تعريف دالة بسيطة من الـ C Library لجلب الـ PID الحالي
 ffi.cdef[[
     int getpid();
 ]]
